@@ -11,6 +11,9 @@ Format:
 
 ---
 
+## 2026-09-17 10:10
+- Replaced the stub root `README.md` with a full project readme: what Hyperboard is and why, the ingest → reconstruct → compute pipeline (including how `PositionReconstructor` infers positions from fills and handles truncated history), repo layout, stack table, local setup (Docker Postgres, `mvn spring-boot:run`, `npm run dev`, seeding via the admin endpoints), full API table split into public / debug / admin, data model, metric definitions, testing posture, a "designed but not built" section pointing at the blueprint and composite-score docs, a docs index, and repo conventions.
+
 ## 2026-05-02 14:45
 - Created `docs/SESSION_LOG.md` (this file).
 - Created root `CLAUDE.md` with the instruction to append to this log after making changes.

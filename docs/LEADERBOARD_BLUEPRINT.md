@@ -11,7 +11,8 @@ Owner decisions baked in:
 - Refresh: hourly active check + daily full recompute on the leaderboard
   pool, daily candidate batch.
 - Display size: 100 wallets initially.
-- Candidate batch size: 150 / day. Re-evaluation cooldown: 5 days.
+- Candidate batch size: 1,000 / day. Re-evaluation cooldown: 5 days.
+  (Sized against measured N≈7,504 pre-screen survivors — see §11.)
 - All cadences and sizes are tunable later — no need to relitigate now.
 - Composite score formula: deferred (separate design pass).
 
@@ -28,7 +29,7 @@ Owner decisions baked in:
                                 │
        ┌────────────────────────┴────────────────────────┐
        │                                                 │
-       ▼ daily candidate batch (150)                     │
+       ▼ daily candidate batch (1,000)                   │
    Full ingest + reconstruct + stats + score             │
    Pre-screen (≥30 trades, ≥$100k vol, etc.)             │
        │                                                 │
@@ -61,9 +62,10 @@ Three cadences, each with a different cost profile — see §5.
 
 Source: `wss://api.hyperliquid.xyz/ws`, `trades` subscription per coin.
 
-- Single long-lived connection. Subscribe to the top ~10 coins by 24h
-  volume (BTC, ETH, SOL, etc. — pull from `metaAndAssetCtxs` at startup,
-  refresh weekly).
+- Single long-lived connection. Subscribe to the top 5 coins by 24h
+  volume (measured: BTC, ETH, HYPE, ZEC, SOL — captures ~89.8% of
+  notional volume and ~89.7% of trade count). Pull the list from
+  `metaAndAssetCtxs` at startup; refresh weekly.
 - Each `trades` message contains a `users` array (buyer + seller wallet
   addresses). On every message, upsert both addresses into
   `wallet_metadata` with `first_seen_at = now` (no-op if already there).
@@ -177,7 +179,7 @@ gates writes, but keep it as a safety net.
 This is how new wallets enter the leaderboard. **No real-time admission**
 — scoring requires the expensive full ingest, so we batch.
 
-- Pick 150 candidate wallets where `in_pool = false` and
+- Pick 1,000 candidate wallets where `in_pool = false` and
   (`evaluated_at IS NULL` OR `evaluated_at < now - 5d`).
 - Selection order: `evaluated_at NULLS FIRST, first_seen_at ASC` —
   wallets we've never evaluated come first; among those, oldest-discovered
@@ -186,7 +188,7 @@ This is how new wallets enter the leaderboard. **No real-time admission**
   the same 2 s delay. Set `wallet_metadata.evaluated_at = now` regardless
   of outcome.
 - After the batch completes, **swap**:
-  1. Take the union of (current pool ∪ this batch) — at most 250 wallets.
+  1. Take the union of (current pool ∪ this batch) — at most 1,100 wallets.
   2. Sort by `composite_score DESC NULLS LAST`.
   3. Set `in_pool = true` for the top 100; `in_pool = false` for the rest.
   - Wallets demoted out of the pool keep their `wallet_stats` row and
@@ -195,11 +197,12 @@ This is how new wallets enter the leaderboard. **No real-time admission**
 - Run right after the daily pool recompute so all scores in the union
   are current. Spring `@Scheduled(cron = "0 30 3 * * *")`
   (~30 min after the 03:00 daily recompute).
-- Cost: 150 wallets × ~5 s = ~12 minutes per day. ~90 min/week of API
-  time, well under HL's 1200 weight/min ceiling.
+- Cost: 1,000 wallets × ~5 s = ~83 minutes per day. ~10 hours/week of
+  API time. Per-IP rate is ~38 weight/min averaged — under 3.2% of HL's
+  1,200 weight/min ceiling.
 
-For an estimated population of ~1,000 pre-screen-eligible wallets, this
-cycles through every non-pool wallet roughly once per week.
+For the measured N ≈ 7,504 pre-screen survivors (§11), this cycles
+through every non-pool wallet in ~7.5 days.
 
 ### Inactivity TTL
 - Drop a wallet from the pool if `last_active_at < now - 60d`. Removes
@@ -208,12 +211,12 @@ cycles through every non-pool wallet roughly once per week.
   jumps to the front of the candidate queue).
 
 ### Total weekly cost
-- Daily recompute: 100 × 7   = 700   full evaluations
-- Daily batch:     150 × 7   = 1,050 full evaluations
-- Hourly check:    100 × 168 = 16,800 light requests
-- **Total: ~1,750 full evals + 16.8k light requests per week** —
-  roughly 90 minutes of API time, ~3 weight/min averaged. We use under
-  0.3% of HL's per-IP limit; lots of room to raise rates later.
+- Daily recompute: 100 × 7    = 700    full evaluations
+- Daily batch:    1,000 × 7   = 7,000  full evaluations
+- Hourly check:    100 × 168  = 16,800 light requests
+- **Total: ~7,700 full evals + 16.8k light requests per week** —
+  roughly 10 hours of API time, ~38 weight/min averaged. We use under
+  3.2% of HL's per-IP limit; room remains to raise rates later.
 
 ---
 
@@ -236,13 +239,13 @@ ALTER TABLE wallet_metadata
 -- source:        'ws_trades' | 'manual' | 'recent_trades_rest'
 -- in_pool:       true = on the leaderboard (refresh targets it)
 -- evaluated_at:  ms epoch of last full eval, NULL if never evaluated;
---                drives the 30d candidate cooldown.
+--                drives the 5d candidate cooldown.
 
 -- Fast lookup for the daily/hourly jobs (the 100 pool wallets)
 CREATE INDEX wallet_metadata_in_pool
     ON wallet_metadata (in_pool) WHERE in_pool = true;
 
--- Fast lookup for the weekly candidate batch (cooldown-eligible wallets)
+-- Fast lookup for the daily candidate batch (cooldown-eligible wallets)
 CREATE INDEX wallet_metadata_candidate_queue
     ON wallet_metadata (evaluated_at NULLS FIRST, first_seen_at)
     WHERE in_pool = false;
@@ -270,8 +273,8 @@ New packages:
 - `com.hyperboard.scheduling`
   - `HourlyActiveCheckJob` — pool only.
   - `DailyFullRecomputeJob` — pool only.
-  - `DailyCandidateBatchJob` — picks 150 from the queue, evaluates them,
-    runs the union-and-swap step that updates `in_pool` flags.
+  - `DailyCandidateBatchJob` — picks 1,000 from the queue, evaluates
+    them, runs the union-and-swap step that updates `in_pool` flags.
   - All annotated `@Scheduled`. Skip running if previous run still in
     flight (use a `ReentrantLock` or DB advisory lock).
 
@@ -294,7 +297,7 @@ Existing packages:
 | No notion of "active wallet"                           | `last_active_at` updated hourly; wallets time out at 60d.                |
 | `wallet_stats.account_value` updated on full recompute | Updated hourly via the active check.                                     |
 | Whole `wallet_stats` table = the "leaderboard"         | `wallet_metadata.in_pool` flags the 100; demoted wallets keep stats rows.|
-| New wallets entered via manual seed                    | Candidates queue up automatically; daily batch admits up to 150 at a time.|
+| New wallets entered via manual seed                    | Candidates queue up automatically; daily batch admits up to 1,000/day.   |
 
 ---
 
@@ -320,8 +323,8 @@ Existing packages:
 3. Daily full-recompute job (using existing ingestion + stats services).
    No-op until something is `in_pool = true`.
 4. Hourly active-check job.
-5. Daily candidate batch job — picks 150 from queue, evaluates, runs the
-   union-and-swap step. This is what first populates `in_pool`.
+5. Daily candidate batch job — picks 1,000 from queue, evaluates, runs
+   the union-and-swap step. This is what first populates `in_pool`.
 6. `CompositeScorer` implementation per `COMPOSITE_SCORE.md`. Add
    `trade_count_30d` and `total_volume` aggregations to the recompute
    path. Until this lands, the union-and-swap step uses `total_pnl` as

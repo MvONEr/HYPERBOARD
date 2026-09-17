@@ -59,10 +59,7 @@ public class StatsComputationService {
 
     log.info(
         "Stats done for {}: tradeCount={} winRate={}% pnl={}",
-        wallet,
-        stats.tradeCount(),
-        String.format("%.1f", stats.winRate() * 100),
-        stats.totalPnl());
+        wallet, stats.tradeCount(), String.format("%.1f", stats.winRate() * 100), stats.totalPnl());
     return stats;
   }
 }
