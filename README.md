@@ -42,7 +42,7 @@ Position reconstruction is the load-bearing piece and the one place worth
 reading closely
 ([`PositionReconstructor.java`](backend/src/main/java/com/hyperboard/domain/PositionReconstructor.java)).
 Hyperliquid returns fills, not positions, so a position is inferred by walking an
-addresses fills in time order: same-direction fills update the weighted-average
+address's fills in time order: same-direction fills update the weighted-average
 entry price, opposite-direction fills close size, and a fill that crosses
 through zero closes one position and opens another. It also handles the
 truncated-history case — when the oldest fill has a non-zero `startPosition`,
